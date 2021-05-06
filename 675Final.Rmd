@@ -1,6 +1,6 @@
 ---
-title: "Tree Canopy Loss in Philadelphia"
-author: "Anna, Palak, Kyle"
+title: "Growth Modeling"
+author: "Tristan, Kyle"
 date: "5/5/2021"
 output: html_document
 ---
