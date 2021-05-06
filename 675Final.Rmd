@@ -1,0 +1,343 @@
+---
+title: "Tree Canopy Loss in Philadelphia"
+author: "Anna, Palak, Kyle"
+date: "5/5/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(sf)
+library(raster)
+library(knitr)
+library(kableExtra)
+library(tidycensus)
+library(tigris)
+library(FNN)
+library(QuantPsyc)
+library(caret)
+library(yardstick)
+library(pscl)
+library(plotROC) 
+library(ggrepel)
+library(pROC)
+library(grid)
+library(gridExtra)
+library(viridis)
+
+mapTheme <- function(base_size = 12) {
+  theme(
+    text = element_text( color = "black"),
+    plot.title = element_text(size = 14,colour = "black"),
+    plot.subtitle=element_text(face="italic"),
+    plot.caption=element_text(hjust=0),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, size=2)
+  )
+}
+
+plotTheme <- function(base_size = 12) {
+  theme(
+    text = element_text( color = "black"),
+    plot.title = element_text(size = 14,colour = "black"),
+    plot.subtitle = element_text(face="italic"),
+    plot.caption = element_text(hjust=0),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    panel.grid.major = element_line("grey80", size = 0.1),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, size=2),
+    strip.background = element_rect(fill = "grey80", color = "white"),
+    strip.text = element_text(size=12),
+    axis.title = element_text(size=12),
+    axis.text = element_text(size=10),
+    plot.background = element_blank(),
+    legend.background = element_blank(),
+    legend.title = element_text(colour = "black", face = "italic"),
+    legend.text = element_text(colour = "black", face = "italic"),
+    strip.text.x = element_text(size = 14)
+  )
+}
+
+palette2 <- c("#41b6c4","#253494")
+palette4 <- c("#a1dab4","#41b6c4","#2c7fb8","#253494")
+palette5 <- c("#ffffcc","#a1dab4","#41b6c4","#2c7fb8","#253494")
+palette10 <- c("#f7fcf0","#e0f3db","#ccebc5","#a8ddb5","#7bccc4",
+               "#4eb3d3","#2b8cbe","#0868ac","#084081","#f7fcf0")
+
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r functions}
+
+#this function converts a column in to quintiles. It is used for mapping.
+quintileBreaks <- function(df,variable) {
+    as.character(quantile(df[[variable]],
+                          c(.01,.2,.4,.6,.8),na.rm=T))
+}
+
+#This function can be used to convert a polygon sf to centroids xy coords.
+xyC <- function(aPolygonSF) {
+  as.data.frame(
+    cbind(x=st_coordinates(st_centroid(aPolygonSF))[,1],
+          y=st_coordinates(st_centroid(aPolygonSF))[,2]))
+} 
+
+#this function convert a raster to a data frame so it can be plotted in ggplot
+rast <- function(inRaster) {
+  data.frame(
+    xyFromCell(inRaster, 1:ncell(inRaster)), 
+    value = getValues(inRaster)) }
+
+
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+
+WashingtonB<- st_read("https://opendata.arcgis.com/datasets/12712f465fc44fb58328c6e0255ca27e_0.geojson")%>% st_transform('ESRI:102326')%>% 
+  rename(Name = COUNTY_NM)%>%
+  dplyr::select(Name, geometry) %>% 
+  filter(Name == "Clark County" | Name == "Skamania County")
+
+OregonB <- 
+  st_read("https://opendata.arcgis.com/datasets/65432a0067f949dd99f3ad0f51f11667_9.geojson") %>%
+  st_transform('ESRI:102326')%>% 
+  rename(Name = COUNTY)%>% 
+  dplyr::select(Name, geometry)%>%
+  filter(Name == "Clackamas" | Name == "Columbia" | Name == "Multnomah" | Name == "Washington" | Name == "Yamhill")
+
+PortlandMetro <- rbind(WashingtonB, OregonB) 
+  
+  
+lc_change = raster("C:/Users/Kyle McCarthy/Documents/CPLN 675/UGB/FinalProject/PortlandO.tif")
+
+ggplot() +
+  geom_raster(data=rast(lc_change) %>% na.omit %>% filter(value > 0 & value < 200), 
+              aes(x,y,fill=as.factor(value))) +
+  scale_fill_viridis(direction = -1, discrete=TRUE, name ="Land Cover\nChange") +
+  labs(title = "Land Cover Change") +
+  mapTheme()
+
+m <- c(0, 2, 0,  3, 3, 1,  3, 
+        Inf,  0)
+m <- matrix(m, ncol=3, byrow = T)
+
+lc_change2 <- 
+  reclassify(lc_change,m)
+
+lc_change2[lc_change2 < 1] <- NA
+
+freq(lc_change2)
+
+names(lc_change2) <- "lc_change"
+
+ggplot() +
+  geom_sf(data = OregonB) + 
+  geom_raster(data=rast(lc_change2) %>% na.omit %>%
+                mutate(Class = "Urban Change") %>% filter(value == 3), 
+              aes(x,y,fill=as.factor(Class))) +
+  scale_fill_viridis(discrete=TRUE, name ="Land Cover\nChange") + 
+  labs(title="Development land use change") +
+  mapTheme()
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r Fishnet, echo=FALSE}
+
+PortlandOMSA_fishnet <- 
+  st_make_grid(OregonB, 2952.76) %>%
+  st_sf()
+
+PortlandOMSA_fishnet <-
+  PortlandOMSA_fishnet[OregonB,]
+
+ggplot() +
+  geom_sf(data=PortlandOMSA_fishnet) +
+  labs(title="Fishnet, 900 m resolution") +
+  mapTheme()
+
+
+changePoints <-
+  rasterToPoints(lc_change2) %>%
+  as.data.frame() %>%
+  st_as_sf(coords = c("x", "y"), crs = st_crs(PortlandOMSA_fishnet))
+
+fishnet <- 
+  aggregate(changePoints, PortlandOMSA_fishnet, sum) %>%
+  mutate(lc_change = ifelse(is.na(lc_change),0,1),
+         lc_change = as.factor(lc_change))
+
+ggplot() +
+  geom_sf(data=OregonB) +
+  geom_point(data=fishnet, 
+             aes(x=xyC(fishnet)$x, y=xyC(fishnet)$y, colour=lc_change)) +
+  scale_colour_manual(values = palette2,
+                      labels=c("No Change","New Development"),
+                      name = "") +
+  labs(title = "Land Cover Development Change", subtitle = "As fishnet centroids") +
+  mapTheme()
+
+
+
+```
+
+``` {r Census, echo=FALSE}
+
+census_api_key("d9ebfd04caa0138647fbacd94c657cdecbf705e9", install = FALSE, overwrite = TRUE)
+
+PortlandPop15 <- 
+ get_acs(geography = "tract", variables = "B01001_001", year = 2015,
+                              state = 41, geometry = TRUE, 
+                              county=c(005, 009, 051, 067, 071)) %>% 
+  st_transform(st_crs(PortlandOMSA_fishnet))
+
+
+PortlandPop10 <-
+   get_acs(geography = "tract", variables = "B01001_001", year = 2010,
+                              state = 41, geometry = TRUE, 
+                              county=c(005, 009, 051, 067, 071)) %>%
+  st_transform(st_crs(PortlandOMSA_fishnet))
+
+
+grid.arrange(
+ggplot() +
+  geom_sf(data = PortlandPop15, aes(fill=factor(ntile(estimate,5))), colour=NA) +
+  scale_fill_manual(values = palette5,
+                    labels=quintileBreaks(PortlandPop15,"estimate"),
+                   name="Quintile\nBreaks") +
+  labs(title="Population, Portland MSA: 2015") +
+  mapTheme(),
+
+ggplot() +
+  geom_sf(data = PortlandPop10, aes(fill=factor(ntile(estimate,5))), colour=NA) +
+  scale_fill_manual(values = palette5,
+                    labels=quintileBreaks(PortlandPop10,"estimate"),
+                   name="Quintile\nBreaks") +
+  labs(title="Population, Portland MSA: 2010") +
+  mapTheme(), ncol=2)
+
+
+```
+``` {r Interpolate, echo=FALSE}
+PortlandOMSA_fishnet <-
+  PortlandOMSA_fishnet %>%
+  rownames_to_column("fishnetID") %>% 
+  mutate(fishnetID = as.numeric(fishnetID)) %>%
+  dplyr::select(fishnetID)
+
+fishnetPopulation15 <-
+  st_interpolate_aw(PortlandPop15["estimate"],PortlandOMSA_fishnet, extensive=TRUE) %>%
+  as.data.frame(.) %>%
+  left_join(PortlandOMSA_fishnet, ., by=c("fishnetID"='Group.1')) %>% 
+  mutate(pop_2015 = replace_na(estimate,0)) %>%
+  dplyr::select(pop_2015)
+
+fishnetPopulation15 <-
+  st_interpolate_aw(PortlandPop10["estimate"],PortlandOMSA_fishnet, extensive=TRUE) %>%
+  as.data.frame(.) %>%
+  left_join(PortlandOMSA_fishnet, ., by=c("fishnetID"='Group.1')) %>% 
+  mutate(pop_2010 = replace_na(estimate,0)) %>%
+  dplyr::select(pop_2010)
+
+fishnetPopulation <- 
+  cbind(fishnetPopulation10,fishnetPopulation15) %>%
+  dplyr::select(pop_2010,pop_2015) %>%
+  mutate(pop_Change = pop_2015 - pop_2010)
+
+ggplot() +
+  geom_sf(data=fishnetPopulation, aes(fill=factor(ntile(pop_Change,5))),colour=NA) +
+  scale_fill_manual(values = palette5,
+                   labels=substr(quintileBreaks(fishnetPopulation,"pop_Change"),1,4),
+                   name="Quintile\nBreaks") +
+  labs(title="Population Change by Grid Cell, Portland MSA: 2010-2015") +
+  mapTheme()
+
+
+```
+
+```{r highways}
+
+HW <-
+  st_read("C:/Users/Kyle McCarthy/Documents/CPLN 675/UGB/FinalProject/Data/hw.shp") %>%
+  st_zm()%>% 
+  st_transform(st_crs(OregonB)) %>%
+  st_intersection(OregonB)
+
+
+
+ggplot() +
+  geom_point(data=fishnet, 
+             aes(x=xyC(fishnet)[,1], y=xyC(fishnet)[,2],colour=lc_change),size=1.5) +
+  geom_sf(data=HW) +
+  scale_colour_manual(values = palette2,
+                      labels=c("No Change","New Development")) +
+  labs(title = "New Development and Highways",
+       subtitle = "As fishnet centroids") +
+  mapTheme()
+
+
+emptyRaster <- lc_change
+emptyRaster[] <- NA
+
+highway_raster <- 
+  as(HW,'Spatial') %>%
+  rasterize(.,emptyRaster)
+
+highway_raster_distance <- distance(highway_raster)
+names(highway_raster_distance) <- "distance_highways"
+
+highwayPoints <-
+  rasterToPoints(highway_raster_distance) %>%
+  as.data.frame() %>%
+  st_as_sf(coords = c("x", "y"), crs = st_crs(PortlandOMSA_fishnet))
+
+highwayPoints_fishnet <- 
+  aggregate(highwayPoints, PortlandOMSA_fishnet, mean) %>%
+  mutate(distance_highways = ifelse(is.na(distance_highways),0,distance_highways))
+
+ggplot() +
+  geom_sf(data=OregonB) +
+  geom_point(data=highwayPoints_fishnet, aes(x=xyC(highwayPoints_fishnet)[,1], 
+                                             y=xyC(highwayPoints_fishnet)[,2], 
+                 colour=factor(ntile(distance_highways,5))),size=1.5) +
+  scale_colour_manual(values = palette5,
+                      labels=substr(quintileBreaks(highwayPoints_fishnet,"distance_highways"),1,8),
+                      name="Quintile\nBreaks") +
+  geom_sf(data=HW, colour = "red") +
+  labs(title = "Distance to Highways",
+       subtitle = "As fishnet centroids; Highways visualized in red") +
+  mapTheme()
+
+
+
+```
+
+```{r UGB}
+
+ugb <- st_read("C:/Users/Kyle McCarthy/Documents/CPLN 675/UGB/FinalProject/Data/UGB.geojson")%>% 
+  st_transform(st_crs(OregonB))%>%
+  st_make_valid() %>%
+  st_intersection(OregonB)
+
+
+```
