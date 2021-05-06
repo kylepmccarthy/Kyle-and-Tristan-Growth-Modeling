@@ -166,7 +166,8 @@ Note that the `echo = FALSE` parameter was added to the code chunk to prevent pr
 
 PortlandOMSA_fishnet <- 
   st_make_grid(OregonB, 2952.76) %>%
-  st_sf()
+  st_sf()%>% 
+  mutate(ID = seq.int(nrow(.)))
 
 PortlandOMSA_fishnet <-
   PortlandOMSA_fishnet[OregonB,]
@@ -182,15 +183,16 @@ changePoints <-
   as.data.frame() %>%
   st_as_sf(coords = c("x", "y"), crs = st_crs(PortlandOMSA_fishnet))
 
-fishnet <- 
+FinalFishnet <- 
   aggregate(changePoints, PortlandOMSA_fishnet, sum) %>%
   mutate(lc_change = ifelse(is.na(lc_change),0,1),
-         lc_change = as.factor(lc_change))
+         lc_change = as.factor(lc_change))%>% 
+  mutate(ID = seq.int(nrow(.)))
 
 ggplot() +
   geom_sf(data=OregonB) +
-  geom_point(data=fishnet, 
-             aes(x=xyC(fishnet)$x, y=xyC(fishnet)$y, colour=lc_change)) +
+  geom_point(data=FinalFishnet, 
+             aes(x=xyC(FinalFishnet)$x, y=xyC(FinalFishnet)$y, colour=lc_change)) +
   scale_colour_manual(values = palette2,
                       labels=c("No Change","New Development"),
                       name = "") +
@@ -241,31 +243,31 @@ ggplot() +
 ``` {r Interpolate, echo=FALSE}
 PortlandOMSA_fishnet <-
   PortlandOMSA_fishnet %>%
-  rownames_to_column("fishnetID") %>% 
-  mutate(fishnetID = as.numeric(fishnetID)) %>%
-  dplyr::select(fishnetID)
+  dplyr::select(ID)
 
 fishnetPopulation15 <-
   st_interpolate_aw(PortlandPop15["estimate"],PortlandOMSA_fishnet, extensive=TRUE) %>%
   as.data.frame(.) %>%
-  left_join(PortlandOMSA_fishnet, ., by=c("fishnetID"='Group.1')) %>% 
+  left_join(PortlandOMSA_fishnet, ., by=c("ID"='Group.1')) %>% 
   mutate(pop_2015 = replace_na(estimate,0)) %>%
-  dplyr::select(pop_2015)
+  dplyr::select(pop_2015, ID)
 
 fishnetPopulation15 <-
   st_interpolate_aw(PortlandPop10["estimate"],PortlandOMSA_fishnet, extensive=TRUE) %>%
   as.data.frame(.) %>%
-  left_join(PortlandOMSA_fishnet, ., by=c("fishnetID"='Group.1')) %>% 
+  left_join(PortlandOMSA_fishnet, ., by=c("ID"='Group.1')) %>% 
   mutate(pop_2010 = replace_na(estimate,0)) %>%
-  dplyr::select(pop_2010)
+  dplyr::select(pop_2010, ID)
 
 fishnetPopulation <- 
   cbind(fishnetPopulation10,fishnetPopulation15) %>%
-  dplyr::select(pop_2010,pop_2015) %>%
+  dplyr::select(pop_2010,pop_2015, ID) %>%
   mutate(pop_Change = pop_2015 - pop_2010)
 
+FinalFishnet <- left_join(FinalFishnet, st_drop_geometry(fishnetPopulation))
+
 ggplot() +
-  geom_sf(data=fishnetPopulation, aes(fill=factor(ntile(pop_Change,5))),colour=NA) +
+  geom_sf(data=FinalFishnet, aes(fill=factor(ntile(pop_Change,5))),colour=NA) +
   scale_fill_manual(values = palette5,
                    labels=substr(quintileBreaks(fishnetPopulation,"pop_Change"),1,4),
                    name="Quintile\nBreaks") +
@@ -286,8 +288,8 @@ HW <-
 
 
 ggplot() +
-  geom_point(data=fishnet, 
-             aes(x=xyC(fishnet)[,1], y=xyC(fishnet)[,2],colour=lc_change),size=1.5) +
+  geom_point(data=FinalFishnet, 
+             aes(x=xyC(FinalFishnet)[,1], y=xyC(fishnet)[,2],colour=lc_change),size=1.5) +
   geom_sf(data=HW) +
   scale_colour_manual(values = palette2,
                       labels=c("No Change","New Development")) +
@@ -315,6 +317,8 @@ highwayPoints_fishnet <-
   aggregate(highwayPoints, PortlandOMSA_fishnet, mean) %>%
   mutate(distance_highways = ifelse(is.na(distance_highways),0,distance_highways))
 
+fishnet <- highwayPoints_fishnet
+
 ggplot() +
   geom_sf(data=OregonB) +
   geom_point(data=highwayPoints_fishnet, aes(x=xyC(highwayPoints_fishnet)[,1], 
@@ -339,5 +343,57 @@ ugb <- st_read("C:/Users/Kyle McCarthy/Documents/CPLN 675/UGB/FinalProject/Data/
   st_make_valid() %>%
   st_intersection(OregonB)
 
+ggplot() +
+  geom_point(data=fishnet, 
+             aes(x=xyC(fishnet)$x, y=xyC(fishnet)$y, colour=lc_change)) +
+  scale_colour_manual(values = palette2,
+                      labels=c("No Change","New Development"),
+                      name = "") +
+  labs(title = "Land Cover Development Change - Urban Grwoth Boundaries", subtitle = "As fishnet centroids") +
+  geom_sf(data = ugb, fill = NA, colour = "red")+ 
+  mapTheme() 
+
+fishnetDev <- 
+  fishnet%>% 
+  filter(lc_change == 1)%>%
+  mutate(ID = seq.int(nrow(.)))
+
+UGBdev <- 
+  fishnetDev %>% 
+  st_intersection(ugb)%>% 
+  mutate(In_UGB = "Inside")%>%
+  st_drop_geometry()%>%
+  left_join(fishnetDev, .)%>%
+  mutate(In_UGB = replace_na(In_UGB, "Outside"))
+
+ggplot(UGBdev, aes(In_UGB)) + 
+  geom_bar(fill = "#adffff") + 
+  xlab("Inside Urban Growth Boundary?")+
+  ylab("Count of Newly Developed Gridcells")+ 
+  labs(title = "Do Urban Growth Boundaries Impact Development?")
+
+fishnetUGB <- 
+  FinalFishnet%>% 
+  mutate(ID = seq.int(nrow(.)))
+
+fishnetUGBAll <- 
+  fishnetUGB %>% 
+  st_centroid()%>%
+  st_intersection(ugb)%>% 
+  mutate(In_UGB = "Inside")%>%
+  st_drop_geometry()%>%
+  left_join(fishnetUGB, .)%>%
+  mutate(In_UGB = replace_na(In_UGB, "Outside"))%>%
+  dplyr::select(In_UGB, geometry)
+
+```
+
+
+``` {r Combining Fishnets}
+
+dat <- 
+  cbind(
+    PortlandOMSA_fishnet, highwayPoints_fishnet, fishnetPopulation, fishnetUGBAll) %>%
+  st_join(OregonB) 
 
 ```
